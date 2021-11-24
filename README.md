@@ -13,6 +13,7 @@ make simulated aliasing prior to inputting to CNN via testing script.
 Also currently the scripts take tfrecords as inputs and outputs mat files.
 
 The CNN architecture has been described previously here:  https://doi.org/10.1002/mrm.28257
+
 Will hopefuilly update soon will aorta segmentation scripts.
 
 Please feel free to reach out via email with questions, comments, or suggestions :)
