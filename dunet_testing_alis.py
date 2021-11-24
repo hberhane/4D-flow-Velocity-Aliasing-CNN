@@ -1,4 +1,4 @@
-from dense_unet_v6_alis import Unet
+from dense_unet_v6_alis import DUnet
 import tensorflow as tf
 import numpy as np
 import os
@@ -11,7 +11,13 @@ import statistics
 import pickle
 import scipy.ndimage.morphology as scipy
 
-n = 54
+"""
+Current Implementation of the testing script generates the unwrapped 4d flow data and saves it as a mat file;
+Dice scores are calculated outside
+
+If people would like, I can update the script to have it (1) save the mask of detected alias voxels and (2) calculate dice scores
+"""
+
 
 def feed_data():
     data_path = '/media/haben/My Passport1/Autopreprocessing/alis_sim_40_1.tfrecords'  # address to save the hdf5 file
@@ -43,29 +49,24 @@ def feed_data():
 
     # Cast label data into data type
     #label = tf.decode_raw(features['test/label'], tf.uint8)
+    
+
     # Reshape image data into the original shape
     image = tf.reshape(image, [height, width, depth])
-    #seg = tf.reshape(seg, [height, width, depth])
 
-    #label = tf.reshape(label, [height, width, depth])
     image = tf.image.resize_image_with_crop_or_pad(image, 160, 96)
-    #seg = tf.image.resize_image_with_crop_or_pad(seg, 160, 96)
 
-    #label = tf.image.resize_image_with_crop_or_pad(label, 160, 96)
-    #label = tf.cast(label,tf.float32)
+    
     image = tf.cast(image,tf.float32)
     #seg = tf.cast(seg,tf.float32)
 
-    #image = image[10:138,:,:]
-    #label = label[10:138,:,:]
 
     image = tf.expand_dims(image,axis = 0)
-    #seg = tf.expand_dims(seg,axis = 0)
 
     #label = tf.expand_dims(label,axis = 0)
     image2 = image
     image = tf.expand_dims(image,axis = 4)
-    image = (image - tf.reduce_min(image))/(tf.reduce_max(image) - tf.reduce_min(image))
+    image = (image - tf.reduce_min(image))/(tf.reduce_max(image) - tf.reduce_min(image)) #input to CNN; image2 used as basis of unwrapping
 
     #label = tf.expand_dims(label,axis = 4)
     q = tf.FIFOQueue(capacity=50, dtypes=[tf.float32,tf.float32, tf.float32])
@@ -74,6 +75,9 @@ def feed_data():
     qr = tf.train.QueueRunner(q,[enqueue_op])
 
     return image,image2, depth, venc, phases
+
+    ##Dice calculation: currently not used
+    #Same as training script except dice value is outputted instead of 1-dice
 def cost_dice(logits, labels, seg, name='cost'):
     with tf.name_scope('cost'):
         eps = 1e-5
@@ -98,35 +102,32 @@ def cost_dice(logits, labels, seg, name='cost'):
         return loss
 
 
-def Unet_test():
+def DUnet_test():
 
     image_batch_placeholder = tf.placeholder(tf.float32, shape=[None, 160,96,None, 1])
     image_batch_placeholder2 = tf.placeholder(tf.float32, shape=[None, 160,96,None])
 
-    #label_batch_placeholder = tf.placeholder(tf.float32, shape=[None, 160, 96,None])
-    seg_batch_placeholder = tf.placeholder(tf.float32, shape=[1, 160, 96,None])
+    
+    
 
-    #labels_pixels = tf.reshape(label_batch_placeholder, [-1, 1])    #   if_training_placeholder = tf.placeholder(tf.bool, shape=[])
+    
     training_flag = tf.placeholder(tf.bool)
     image_batch,image_batch2,depth, venc, phase = feed_data()
 
 
-    #label_batch_dense = tf.arg_max(label_batch, dimension = 1)
+    
 
- #   if_training = tf.Variable(False, name='if_training', trainable=False)
+ 
 
-    logits = Unet(x = image_batch_placeholder, training=training_flag).model
-    #logits = logits>1
-    #logs = cost_dice(logits,label_batch_placeholder, seg_batch_placeholder)
+    logits = DUnet(x = image_batch_placeholder, training=training_flag).model
+    
     llogits = tf.nn.softmax(logits)
     
     
 
-    checkpoint = tf.train.get_checkpoint_state('/media/haben/D4CC01B2CC018FC2/aliasing/new_alis1')#"/media/haben/D4CC01B2CC018FC2/alis_og_crop") #good_alis #new_alis_z #new_alis_y
+    checkpoint = tf.train.get_checkpoint_state('/media/haben/D4CC01B2CC018FC2/aliasing/alias_train')
     saver = tf.train.Saver()
-    #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
 
- #  logits_batch = tf.to_int64(tf.arg_max(logits, dimension = 1))
     d = 0
 
     config = tf.ConfigProto(log_device_placement=False)
@@ -161,7 +162,6 @@ def Unet_test():
             _, llogit = sess.run([logits, llogits], feed_dict={image_batch_placeholder: image_out,
 
                                                                                     #label_batch_placeholder: truth,
-                                                                                    #seg_batch_placeholder: seg,
                                                                                     image_batch_placeholder2: alias,
                                                                                     training_flag: True})
             
@@ -180,7 +180,7 @@ def Unet_test():
             data = np.squeeze(infer_out)
             
            
-            h = data>0.2
+            h = data>0.5
             h = scipy.binary_fill_holes(h.astype(int))
             #print(np.max(alias))
             alias = np.squeeze(alias)
@@ -190,7 +190,7 @@ def Unet_test():
             #plt.imshow(data)
             #plt.show()
             
-            
+            #Unrapping data based on mask
             
             for i in range(alias.shape[2]):
                 for x in range(alias.shape[0]):
@@ -226,7 +226,7 @@ def Unet_test():
 def main():
     tf.reset_default_graph()
 
-    Unet_test()
+    DUnet_test()
 
 
 

@@ -1,17 +1,16 @@
 import tensorflow as tf
-tf.compat.v1.disable_v2_behavior()
-import tensorflow.compat.v1 as tf
 import numpy as np
 from tqdm import tqdm
 from colorama import Fore
 import random
 import os
 import matplotlib.pyplot as plt
-os.environ["CUDA_VISIBLE_DEVICES"]="0" 
 
 """
 Aliasing CNN uses just the phase images with no velocity aliasing 
 the simulated aliasing and a ground-truth locating all aliased voxels is automatically done in the script
+
+The CNN archecture is a 3D hybrid UNet and DenseNet and has been previously described here:  https://doi.org/10.1002/mrm.28257
 """
 
 def parser(tfrecord):
@@ -48,7 +47,9 @@ def parser(tfrecord):
     #random factor to reduce the venc, between [0.3 0.7] times the venc of the scan
     r = tf.random_uniform(shape=[], minval=0.3, maxval=0.7, dtype=tf.float32)
 
-    #venc_3 = 0 < r  and r < 0.2
+    """
+    Generate mask of voxels >sim_venc and < sim_venc 
+    """
     mask1 = image2 > tf.multiply(r,venc)
     mask2 = image2 < tf.multiply(-r,venc)
     new_venc = tf.multiply(r,venc)
@@ -58,31 +59,28 @@ def parser(tfrecord):
     
 
    
-
+    """
+    simulate velocity aliasing based on the mask determined above
+    """
     v_mask1 = tf.multiply(mask1,tf.multiply(2.,new_venc))
     image2 = tf.subtract(image2,v_mask1)
-    #image2[mask2] = tf.add(image2[mask2], tf.multiply(2,new_venc))
     v_mask2 = tf.multiply(mask2,tf.multiply(2.,new_venc))
     image2 = tf.add(image2,v_mask2)
 
     
-
+    #Generate ground-truth through abs of velocity data > sim_venc
     truth1 = tf.abs(image) > new_venc
 
     
-    truth1 = tf.cast(truth1, tf.int32)
-    #truth2 = tf.cast(truth2, tf.int32)
-    #truth3 = tf.cast(truth3, tf.int32)
-
-    truth = truth1 #+ truth2 + truth3
-    #image = tf.expand_dims(image,axis = 0)
-    #label = tf.expand_dims(label,axis = 0)
+    truth = tf.cast(truth1, tf.int32)
+    
+    
+    #Nomralize input between (0,1)
     image = (image2 - tf.reduce_min(image2))/(tf.reduce_max(image2) - tf.reduce_min(image2))
-    #image = tf.expand_dims(image,axis = 2)
-    #h =  tf.multiply(0.7,venc)
+
+    
     label = tf.one_hot(truth, depth=2,on_value=1,off_value=0,axis=-1 )
-    g = 0.8
-    p = tf.math.logical_and(0.8<g, g< 1.0)
+    
     return image, label,r
 
 def encoder_layer(x_con, channels, name,training, pool=True):
@@ -111,37 +109,17 @@ def decoder_layer(input_, x, ch, name, upscale = [2,2,2]):
     up = tf.layers.conv3d_transpose(input_,filters=12,kernel_size = [2,2,1],strides = [2,2,1],padding='SAME',name='upsample'+str(name), use_bias=False)
     up = tf.concat([up,x], axis=-1, name='merge'+str(name))
     return up
-def augmentation(image, mask):
 
     
 
-    images = tf.image.resize_image_with_crop_or_pad(image,208,240)
-    masks = tf.image.resize_image_with_crop_or_pad(mask,208,240)
-
-    images = tf.cast(images, tf.float32)
-    images = (images - tf.reduce_min(images))/(tf.reduce_max(images) - tf.reduce_min(images))
-    masks = (masks - tf.reduce_min(masks))/(tf.reduce_max(masks) - tf.reduce_min(masks))
-    masks = tf.cast(masks, tf.int32)
-    
-
-    masks = tf.squeeze(masks)
-
-    masks = tf.one_hot(masks, depth=2, on_value=1.0, off_value=0.0)
-
-
-
-    return images, masks
-
-    
-
-class Unet():
+class DUnet():
     def __init__(self, x, training):
         #self.filters = filters
         self.training = training
-        self.model = self.U_net(x)
+        self.model = self.DU_net(x)
 
     
-    def U_net(self,input_):
+    def DU_net(self,input_):
         skip_conn = []
 
 
@@ -170,9 +148,7 @@ class Unet():
 def cost_dice(logits, labels,name='cost'):
     with tf.name_scope('cost'):
         eps = 1e-5
-        #N,H,W,C,J = labels.get_shape()
-        #logits = tf.argmax(logits, axis=4)
-        #logits = logits[...,1]
+        
         logits = tf.cast(logits,tf.float32)
         labels1 = labels[...,1]
         logits1 = logits[...,1]
@@ -184,28 +160,9 @@ def cost_dice(logits, labels,name='cost'):
         inter1 = eps + tf.reduce_sum(inte1)
         union1 =  tf.reduce_sum(log1) + tf.reduce_sum(labels1)+eps
 
-        #labels2 = labels[...,2]
-        #logits2 = logits[...,2]
-        #log2 = tf.reshape(logits2,[1,-1])
         
-        #labels2 = tf.reshape(labels2,[1,-1])
-        
-        #inte2 = tf.multiply(log2,labels2)
-        #inter2 = eps + tf.reduce_sum(inte2)
-        #union2 =  tf.reduce_sum(log2) + tf.reduce_sum(labels2)+eps
 
-        #labels3 = labels[...,3]
-        #logits3 = logits[...,3]
-        #log3 = tf.reshape(logits3,[1,-1])
-        
-        #labels3 = tf.reshape(labels3,[1,-1])
-        
-        #inte3 = tf.multiply(log3,labels3)
-        #inter3 = eps + tf.reduce_sum(inte3)
-        #union3 =  tf.reduce_sum(log3) + tf.reduce_sum(labels3)+eps
-
-        loss = 1-tf.reduce_mean(2* inter1/ (union1))# + (1 - tf.reduce_mean(2* inter2/ (union2))) #+ (1 - tf.reduce_mean(2* inter3/ (union3)))
-        #loss = 1- loss
+        loss = 1-tf.reduce_mean(2* inter1/ (union1))
         return loss
 
             
@@ -217,70 +174,44 @@ def cost_dice(logits, labels,name='cost'):
 
     
    
-def Unet_train():
+def DUnet_train():
     image_batch_placeholder = tf.placeholder("float32", shape=[1, 128,96,None, 1])
     label_batch_placeholder = tf.placeholder(tf.float32, shape=[1, 128,96,None,2])
     labels_pixels = tf.reshape(label_batch_placeholder, [-1, 2])
-    #ima_batch_placeholder = tf.placeholder("float32", shape=[128,96,None])
-    #image_batch, label_batch, depth = feed_data()
     
     
-    
-
-
-
     training_flag = tf.placeholder(tf.bool)
 
-    logits = Unet(x = image_batch_placeholder, training=training_flag).model
+    logits = DUnet(x = image_batch_placeholder, training=training_flag).model
     N,H,W,C,S = logits.get_shape().as_list()
     logit = tf.reshape(logits,(-1, 2))
-    #class_weights = tf.constant(0.1,0.9)
-    #class_weights = tf.constant(0.1, dtype=tf.float32, shape=[1, 1])
-    #h = tf.argmax(logits, axis = 4)
+    
     h = tf.squeeze(logits)
     
     
 
-
-
-
-
-
-
-
-    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=labels_pixels, logits=logit))
-    #loss = tf.reduce_mean((logit - labels_pixels)**2)
+    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=labels_pixels, logits=logit)) #Loss function of softmax cross-entropy
     
-
-    #loss = tf.reduce_mean(loss)
 
     soft = tf.nn.softmax(h)
 
-    #tf.summary.scalar('loss', loss) # create a summary for training loss
 
     regularzation_loss = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-    #tf.summary.scalar('regularzation_loss', regularzation_loss)
     
     l = tf.squeeze(label_batch_placeholder)
 
     
-    cost_loss = cost_dice(logits=soft, labels = l)
+    cost_loss = cost_dice(logits=soft, labels = l) #Loss function of dice-loss
     
-    #total_loss = loss + total_loss
     
 
 
     global_step = tf.Variable(0, name='global_step', trainable=False)
 
-    #learning_rate = tf.train.exponential_decay(learning_rate=0.1,
-    #                                           global_step=global_step,
-    #                                           decay_steps=228000,
-    #                                           decay_rate=0.1,
-    #                                           staircase=True)
-    learning_rate = 0.0001
+    
+    learning_rate = 0.0001 #Static leanring rate
     tf.summary.scalar('learning_rate', learning_rate)
 
-    #train_step = tf.train.MomentumOptimizer(learning_rate = learning_rate, momentum=nesterov_momentum,use_nesterov=True).minimize(total_loss, global_step=global_step)
     
 
     saver = tf.train.Saver(max_to_keep=50)
@@ -291,12 +222,7 @@ def Unet_train():
     config = tf.ConfigProto(log_device_placement=False)
     config.gpu_options.allow_growth=True
     sess = tf.Session(config=config)
-    #k = tf.reshape(new, [1, -1])
-    #H,W = k.get_shape().as_list()
     
-    #new = tf.math.subtract(new, tf.math.multiply(tf.math.multiply(v,tf.math.sign(value)),2/100))
-    #og2 = tf.reshape(og2, [1,-1])
-    #diff = tf.reduce_sum((dif)**2)
     total_loss = cost_loss + loss
     tf.summary.scalar('total_loss', total_loss)
     train_step = tf.train.AdamOptimizer(learning_rate = learning_rate).minimize(total_loss, global_step=global_step)
@@ -306,10 +232,11 @@ def Unet_train():
 
 
     filenames = []
-    a = '/media/haben/D4CC01B2CC018FC2/aliasing_data/alis_try2.tfrecords'
-    #b= '/media/haben/D4CC01B2CC018FC2/aliasing/alis_train_3.tfrecords'
-    #c = '/media/haben/D4CC01B2CC018FC2/aliasing/alis_train_4.tfrecords'
-    filenames = ['./train_alias2_y.tfrecords']# b, c]
+    a = '/media/haben/D4CC01B2CC018FC2/aliasing_data/alis_train_1.tfrecords'
+    b= '/media/haben/D4CC01B2CC018FC2/aliasing/alis_train_2.tfrecords'
+    c = '/media/haben/D4CC01B2CC018FC2/aliasing/alis_train_3.tfrecords'
+    filenames = [a, b, c]
+    ########### Data input pipeline
     dataset = tf.data.TFRecordDataset(filenames)
     dataset = dataset.map(map_func=parser, num_parallel_calls=3)
     dataset = dataset.batch(1)
@@ -329,7 +256,7 @@ def Unet_train():
     accuracy_accu = 0
 
 
-    checkpoint = tf.train.get_checkpoint_state("./alis_y_tf2_5nd")
+    checkpoint = tf.train.get_checkpoint_state("./alias_weights") #Folder that weights are loaded from
     if(checkpoint != None):
         tf.logging.info("Restoring full model from checkpoint file %s",checkpoint.model_checkpoint_path)
         saver.restore(sess, checkpoint.model_checkpoint_path)
@@ -346,19 +273,9 @@ def Unet_train():
         bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.BLUE, Fore.RESET)):
             #image, label, image2, mask, og, venc
             image_out, truth, r = sess.run(next_element)
-            #tt = np.squeeze(truth)
-            #print(tt.shape)
-            #oo = np.squeeze(image_out)
-            #plt.imshow(oo[...,14], cmap='gray')
-            #plt.show()
-
-            #plt.imshow(tt[...,14,1])
-            #plt.show()
             
-            #print(r)
             image_out = np.expand_dims(image_out,axis=4)
-            #image2 = np.squeeze(image2)
-            #mask = np.squeeze(mask)
+            
             
             _, training_loss, other_loss, _global_step, summary = sess.run([train_step, total_loss, cost_loss, global_step, summary_op],
                 feed_dict={image_batch_placeholder: image_out,
@@ -376,7 +293,7 @@ def Unet_train():
 
         
 
-        saver.save(sess, "./alis_y_tf2_5nd/hb.ckpt", _global_step)
+        saver.save(sess, "./alias_weights/hb.ckpt", _global_step) #Folder that weights are saved
         
         
         
@@ -393,7 +310,7 @@ def Unet_train():
 
 def main():
     tf.reset_default_graph()
-    Unet_train()
+    DUnet_train()
 
 
 
