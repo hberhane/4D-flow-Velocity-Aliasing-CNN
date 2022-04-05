@@ -17,3 +17,4 @@ The CNN architecture has been described previously here:  https://doi.org/10.100
 Will hopefuilly update soon with aorta segmentation scripts.
 
 Please feel free to reach out via email with questions, comments, or suggestions :)
+Email: hberhane@u.northwestern.edu
